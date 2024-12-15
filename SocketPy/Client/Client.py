@@ -7,18 +7,20 @@ FORMAT = "utf-8"
 DOWNLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
 process_display = {}
 
-# def display_process(num_parts):
-#     os.system('cls' if os.name == 'nt' else 'clear')
+display_process_lock = threading.Lock()
 
-#     for file_name in process_display:
-#         print(f"-------| {file_name} |-------")
+def display_process(num_parts):
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-#         for i in range(num_parts):
-#             print(f"Part {i + 1} . . . {process_display[file_name][i]}")
+    for file_name in process_display:
+        print(f"-------| {file_name} |-------")
 
-#         for i in range(len(file_name) + 18):
-#             print("=", end = "")
-#         print(" ")
+        for i in range(num_parts):
+            print(f"Part {i + 1} . . . {process_display[file_name][i]}%")
+
+        for i in range(len(file_name) + 18):
+            print("=", end = "")
+        print(" ")
 
 
 def download_chunk(file_name, offset, chunk_size, server_ip, server_port, part):
@@ -36,7 +38,17 @@ def download_chunk(file_name, offset, chunk_size, server_ip, server_port, part):
                         continue
                     total_len += len(data)
                     f.write(data)
+
+                    process = total_len / chunk_size * 100
+                    process_display[file_name][part - 1] = round(process, 2)
+
+                    # luồng hiện tại chỉ đựoc gọi display_process khi tiến độ nó của tăng tới ngưỡng bội số nguyên của 1
+                    # để hạn chế việc gọi hàm display làm giảm hiệu suất chương trình
+                    if process == int(process):
+                        with display_process_lock:
+                            display_process(4)
             
+            process_display[file_name][part - 1] = 100
             client.close()
 
 def merge_files(filename, num_parts):
