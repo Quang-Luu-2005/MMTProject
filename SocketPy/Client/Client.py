@@ -2,6 +2,7 @@ import socket
 import threading
 import os
 import time
+import sys
 
 FORMAT = "utf-8"
 DOWNLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
@@ -10,21 +11,21 @@ process_display = {}
 display_process_lock = threading.Lock()
 
 def display_process(num_parts):
-    os.system('cls' if os.name == 'nt' else 'clear')
+    sys.stdout.write('\r')
 
     for file_name in process_display:
 
-        print(f"-------| {file_name} |-------")
+        sys.stdout.write(f"-------------| {file_name} |-------------\n")
 
-        if len(process_display[file_name]) == 1:
-            print("Download completely")  
-        else:  
-            for i in range(num_parts):
-                print(f"Part {i + 1} . . . {process_display[file_name][i]}%")
+        for i in range(num_parts):
+            part = (f"Part {i + 1} ")
+            val = int(process_display[file_name][i] // 5)
+            sys.stdout.write(f"{part} [{val * "="}{(20 - val) * " "}] {int(process_display[file_name][i])}%\n") 
+        
+        sys.stdout.flush()
+        sys.stdout.write("\033[F" * (num_parts + 1))
 
-        for i in range(len(file_name) + 18):
-            print("=", end = "")
-        print(" ")
+    sys.stdout.write(" ")
 
 
 def download_chunk(file_name, offset, chunk_size, server_ip, server_port, part):
@@ -84,8 +85,10 @@ def download_file(file_name, file_size, server_ip, server_port):
         thread.join()
 
     merge_files(file_name, 4)
-    process_display[file_name] = ["Download completely"]
-    # del process_display[file_name]
+    del process_display[file_name]
+
+    time.sleep(3)
+    os.system('cls' if os.name == 'nt' else 'clear')
 
 def main():
     server_ip = "127.0.0.1"
@@ -100,18 +103,24 @@ def main():
     files = dict(line.split() for line in data.splitlines())
     downloaded_files = set()
 
+    # upline = 3 + len(data.splitlines())
     while True:
         print("Available files:")
         print(data)
-        print("Please run file getInput.py to enter files you'd like to download.")
-        print("Press Ctrl + C to exit")
+        print("| Please run file getInput.py to enter files you'd like to download.")
+        print("| Press Enter to continue")
+        print("| Press Ctrl + C to exit")
+
+        enter = input()
+        os.system('cls' if os.name == 'nt' else 'clear')
 
         input_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "input.txt")
         if os.path.exists(input_file):
             flag = 0
 
             with open(input_file, "r") as f:
-                files_to_download = [line.strip() for line in f if line.strip() not in downloaded_files]
+                # tải những file thực sự chưa tải
+                files_to_download = [line.strip() for line in f if line.strip() not in downloaded_files and not os.path.exists(os.path.join(DOWNLOAD_FOLDER, line.strip()))]
 
             for file_name in files_to_download:
                 if file_name == None or file_name == "":
