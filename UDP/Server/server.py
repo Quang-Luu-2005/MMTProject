@@ -5,7 +5,7 @@ import struct
 HOST = "127.0.0.1"  # Loopback IP address
 PORT = 65432
 BUFFER_SIZE = 1024
-CHUNK_SIZE = 1024
+CHUNK_SIZE = 1015  # Adjusted to account for header size (9 bytes)
 FORMAT = "utf-8"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Server directory
 TIMEOUT = 2  # Retransmission timeout (in seconds)
@@ -37,22 +37,32 @@ def send_file(server, client_addr, file_name):
 
     with open(file_path, "rb") as f:
         seq_num = 0
-        while chunk := f.read(CHUNK_SIZE):
+        total_bytes_sent = 0
+
+        while total_bytes_sent < file_size:
+            chunk = f.read(CHUNK_SIZE)
+            if not chunk:
+                break
+
+            chunk_len = len(chunk)
             packet_checksum = checksum(chunk)
-            packet = struct.pack(f"I B {CHUNK_SIZE}s", seq_num, packet_checksum, chunk.ljust(CHUNK_SIZE, b'\x00'))
+            # Include chunk length in the packet
+            packet = struct.pack(f"I I B {CHUNK_SIZE}s", seq_num, chunk_len, packet_checksum, chunk.ljust(CHUNK_SIZE, b'\x00'))
             while True:
                 server.sendto(packet, client_addr)
                 try:
                     # Wait for ACK
-                    ack_packet, _ = server.recvfrom(1024)
+                    ack_packet, _ = server.recvfrom(BUFFER_SIZE)
                     ack_seq_num, ack_status = struct.unpack("I B", ack_packet)
 
                     if ack_status == 0 and ack_seq_num == seq_num:  # ACK is correct
+                        total_bytes_sent += chunk_len
                         break
                 except socket.timeout:
                     print(f"[TIMEOUT] Resending packet {seq_num}...")
             seq_num += 1
-    print(f"[SENT] {file_name} to client.")
+
+    print(f"[SENT] {file_name} to client. ({total_bytes_sent}/{file_size} bytes sent)")
 
 def main():
     update_file_list()
