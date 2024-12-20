@@ -1,0 +1,81 @@
+import socket
+import os
+import threading
+import struct
+import hashlib
+import logging
+
+# Constants
+CHUNK_SIZE = 1024
+ACK_SIZE = 4
+TIMEOUT = 5
+LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+
+def download_file(server_host, server_port, filename, file_size, output_dir='downloads'):
+    server_address = (server_host, server_port)
+    os.makedirs(output_dir, exist_ok=True)
+
+    num_chunks = (file_size + CHUNK_SIZE - 1) // CHUNK_SIZE
+    threads = []
+    chunks = [None] * num_chunks
+
+    for i in range(num_chunks):
+        offset = i * CHUNK_SIZE
+        chunk_size = min(CHUNK_SIZE, file_size - offset)
+        thread = threading.Thread(target=download_chunk, args=(server_address, filename, offset, chunk_size, chunks, i))
+        threads.append(thread)
+        thread.start()
+
+    for thread in threads:
+        thread.join()
+
+    # Merge chunks
+    output_path = os.path.join(output_dir, filename)
+    with open(output_path, 'wb') as output_file:
+        for chunk in chunks:
+            if chunk is None:
+                logging.error(f"Missing chunk in {filename}, download failed.")
+                return
+            output_file.write(chunk)
+    logging.info(f"Downloaded {filename} successfully to {output_path}")
+
+def download_chunk(server_address, filename, offset, chunk_size, chunks, index):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+
+
+    request = struct.pack('!4s256siI', b"GETF", filename.encode().ljust(256, b'\x00'), offset, chunk_size)
+    retries = 150
+
+    while retries > 0:
+        try:
+            sock.sendto(request, server_address)
+            sock.settimeout(TIMEOUT)
+            data, _ = sock.recvfrom(CHUNK_SIZE + 32)  # Data + checksum
+
+            if len(data) > CHUNK_SIZE + 32:
+                logging.warning(f"Received data exceeds buffer size: {len(data)} bytes")
+                continue
+
+            chunk, checksum = data[:-32], data[-32:]
+            if hashlib.md5(chunk).hexdigest().encode() == checksum:
+                chunks[index] = chunk
+                sock.sendto(b'ACK\x00', server_address)
+                logging.info(f"Chunk {index} received and verified successfully")
+                break
+            else:
+                logging.warning(f"Checksum mismatch for chunk {index}. Retrying...")
+        except socket.timeout:
+            logging.warning(f"Timeout for chunk {index}, retrying... ({150 - retries}/150)")
+        except Exception as e:
+            logging.exception(f"Error while downloading chunk {index}: {e}")
+        retries -= 1
+
+    if retries == 0:
+        logging.error(f"Failed to download chunk {index} after 150 attempts.")
+
+if __name__ == "__main__":
+    download_file("127.0.0.1", 9999, "BlackMarble_2016_928m_conus.tif", 41518427)

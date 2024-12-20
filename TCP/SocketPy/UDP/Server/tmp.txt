@@ -1,0 +1,64 @@
+import socket
+import os
+import threading
+import struct
+import hashlib
+import logging
+
+# Constants
+CHUNK_SIZE = 1024
+ACK_SIZE = 4
+TIMEOUT = 5
+LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+
+def start_server(host='0.0.0.0', port=9999):
+    server_address = (host, port)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(server_address)
+    logging.info(f"Server running on {host}:{port}")
+
+    while True:
+        try:
+            data, client_address = sock.recvfrom(1024)
+            command, filename, offset, chunk_size = struct.unpack('!4s256siI', data)
+            filename = filename.decode().strip('\x00')
+            offset = int(offset)
+            chunk_size = int(chunk_size)
+
+            if command == b"GETF":
+                file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+                if os.path.exists(file_path):
+                    logging.info(f"Received request for {filename}, offset {offset}, size {chunk_size} from {client_address}")
+                    threading.Thread(target=send_chunk, args=(sock, file_path, offset, chunk_size, client_address)).start()
+                else:
+                    logging.warning(f"File {file_path} not found for client {client_address}")
+            else:
+                logging.error(f"Unknown command from {client_address}")
+        except Exception as e:
+            logging.exception(f"Error in server loop: {e}")
+
+def send_chunk(sock, file_path, offset, chunk_size, client_address):
+    try:
+        with open(file_path, 'rb') as file:
+            file.seek(offset)
+            # Đảm bảo chunk nhỏ hơn hoặc bằng CHUNK_SIZE
+            chunk = file.read(min(CHUNK_SIZE, chunk_size))
+
+            checksum = hashlib.md5(chunk).hexdigest().encode()
+
+            sock.sendto(chunk + checksum, client_address)
+            logging.info(f"Sent chunk (offset: {offset}, size: {chunk_size}) to {client_address}")
+
+            # Wait for ACK
+            sock.settimeout(TIMEOUT)
+            ack, _ = sock.recvfrom(ACK_SIZE)
+            if ack != b'ACK\x00':
+                logging.warning(f"Invalid ACK from {client_address} for offset {offset}")
+    except socket.timeout:
+        logging.warning(f"Timeout for chunk at offset {offset} to {client_address}")
+    except Exception as e:
+        logging.exception(f"Error while sending chunk: {e}")
+
+if __name__ == "__main__":
+    start_server()
