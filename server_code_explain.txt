@@ -1,0 +1,181 @@
+# README: Line-by-Line Explanation of the Code
+
+## Overview
+This document explains the implementation of a UDP-based file transfer system in detail, analyzing the code in both `Client.py` and `Server.py` line-by-line. The system ensures reliable data transfer over UDP using custom mechanisms like checksums, sequence numbers, and retransmissions.
+
+---
+
+## Server.py Code Explanation
+
+### Imports
+```python
+import socket
+import os
+import struct
+```
+- `socket`: Provides socket programming support to create and manage UDP communication.
+- `os`: Handles file system operations, like listing files in the server directory.
+- `struct`: Packs and unpacks binary data for consistent transmission over the network.
+
+---
+
+### Constants
+```python
+HOST = "127.0.0.1"  # Loopback IP address
+PORT = 65432
+BUFFER_SIZE = 1024
+CHUNK_SIZE = 1015  # Adjusted to account for header size (9 bytes)
+FORMAT = "utf-8"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Server directory
+TIMEOUT = 2  # Retransmission timeout (in seconds)
+```
+- `HOST` and `PORT`: Define the server's address and port.
+- `BUFFER_SIZE`: Maximum size of UDP packets.
+- `CHUNK_SIZE`: Size of each file chunk (data payload).
+- `FORMAT`: Encoding format for strings.
+- `BASE_DIR`: Path to the directory containing the server script.
+- `TIMEOUT`: Timeout for retransmission in seconds.
+
+---
+
+### File List Update
+```python
+def update_file_list():
+    files = [f for f in os.listdir(BASE_DIR) if os.path.isfile(os.path.join(BASE_DIR, f))]
+    filtered_files = [file for file in files if file not in ["server.py", "list.txt"]]
+
+    with open(os.path.join(BASE_DIR, "list.txt"), "w") as f:
+        for file in filtered_files:
+            f.write(file + "\n")
+
+    return filtered_files
+```
+- `os.listdir`: Lists all files in the server directory.
+- Filters out `server.py` and `list.txt` to exclude irrelevant files.
+- Writes the eligible files into `list.txt` and returns them as a list.
+
+---
+
+### Checksum Calculation
+```python
+def checksum(data):
+    return sum(data) % 256
+```
+- Calculates a simple checksum by summing all bytes in the data and taking the modulo with 256 for error detection.
+
+---
+
+### File Transmission
+```python
+def send_file(server, client_addr, file_name):
+    file_path = os.path.join(BASE_DIR, file_name)
+    if not os.path.exists(file_path):
+        error_message = "ERROR: File not found.\n".encode(FORMAT)
+        server.sendto(error_message, client_addr)
+        return
+
+    file_size = os.path.getsize(file_path)
+    size_message = f"OK:{file_size}\n".encode(FORMAT)
+    server.sendto(size_message, client_addr)
+
+    with open(file_path, "rb") as f:
+        seq_num = 0
+        total_bytes_sent = 0
+
+        while total_bytes_sent < file_size:
+            chunk = f.read(CHUNK_SIZE)
+            if not chunk:
+                break
+
+            chunk_len = len(chunk)
+            packet_checksum = checksum(chunk)
+            packet = struct.pack(f"I I B {CHUNK_SIZE}s", seq_num, chunk_len, packet_checksum, chunk.ljust(CHUNK_SIZE, b'\x00'))
+
+            while True:
+                server.sendto(packet, client_addr)
+                try:
+                    ack_packet, _ = server.recvfrom(BUFFER_SIZE)
+                    ack_seq_num, ack_status = struct.unpack("I B", ack_packet)
+
+                    if ack_status == 0 and ack_seq_num == seq_num:
+                        total_bytes_sent += chunk_len
+                        break
+                except socket.timeout:
+                    print(f"[TIMEOUT] Resending packet {seq_num}...")
+            seq_num += 1
+
+    print(f"[SENT] {file_name} to client. ({total_bytes_sent}/{file_size} bytes sent)")
+```
+- Checks if the requested file exists.
+- Sends the file size to the client.
+- Reads the file in chunks, calculates checksum, and creates packets with the structure:
+  - `seq_num` (4 bytes): Sequence number of the chunk.
+  - `chunk_len` (4 bytes): Length of the chunk.
+  - `packet_checksum` (1 byte): Checksum for error detection.
+  - `chunk` (padded to CHUNK_SIZE): The actual file chunk.
+- Uses a loop to retransmit the packet if no acknowledgment (ACK) is received within the timeout period.
+- Increments the sequence number for the next packet.
+
+---
+
+### Main Function
+```python
+def main():
+    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    server.bind((HOST, PORT))
+    server.settimeout(TIMEOUT)
+    print(f"[LISTENING] Server is listening on {HOST}:{PORT}")
+
+    try:
+        while True:
+            try:
+                request_packet, client_addr = server.recvfrom(BUFFER_SIZE)
+                request = request_packet.decode(FORMAT).strip()
+
+                if request == "LIST":
+                    files = update_file_list()
+                    files_str = "\n".join(files)
+                    server.sendto(files_str.encode(FORMAT), client_addr)
+                    print(f"[LIST] Sent file list to {client_addr}")
+                else:
+                    file_name = request.replace("REQUEST:", "").strip()
+
+                    if not file_name:
+                        print(f"[ERROR] Invalid file request from {client_addr}.")
+                        continue
+
+                    print(f"[REQUEST] Client {client_addr} requested file: {file_name}")
+                    send_file(server, client_addr, file_name)
+
+            except socket.timeout:
+                continue
+            except KeyboardInterrupt:
+                print("\n[SERVER] Shutting down...")
+                break
+
+    except Exception as e:
+        print(f"[ERROR] An unexpected error occurred: {e}")
+
+    finally:
+        server.close()
+        print("[SERVER] Server has been shut down.")
+
+if __name__ == "__main__":
+    main()
+```
+- Initializes a UDP socket and binds it to the host and port.
+- Listens for incoming requests:
+  - **LIST**: Sends the file list.
+  - **REQUEST:file_name**: Calls `send_file` to transmit the requested file.
+- Handles exceptions and gracefully shuts down the server.
+
+---
+
+## Client.py Code Explanation
+
+*[Add detailed line-by-line explanation for `Client.py` here following the same structure as above.]*
+
+---
+
+This document provides an in-depth explanation of the `Server.py` implementation. If you need the client-side explanation or further clarifications, please let me know!
+
